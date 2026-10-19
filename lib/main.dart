@@ -29,14 +29,14 @@ class KrudevApp extends StatelessWidget {
 }
 
 // -----------------------------------------
-// 🏠 HOME SCREEN (SAF File Picker - No Permissions Needed)
+// 🏠 HOME SCREEN (Direct File Picker)
 // -----------------------------------------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   Future<void> _pickVideo(BuildContext context) async {
     try {
-      // 🚀 Bina kisi permission ke direct File Manager open karega
+      // 🚀 Bina kisi permission error ke direct File Manager khulega
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.video,
         allowMultiple: false,
