@@ -14,9 +14,10 @@ jobs:
           channel: stable
       - run: flutter create --platforms=android .
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+      - run: sed -i 's/android:label="[^"]*"/android:label="Krudev"/' android/app/src/main/AndroidManifest.xml
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
           name: app-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-          
