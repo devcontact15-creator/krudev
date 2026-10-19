@@ -8,6 +8,9 @@ import 'package:video_player/video_player.dart';
 
 void main() => runApp(const KrudevApp());
 
+double _clampD(double v, double lo, double hi) =>
+    v < lo ? lo : (v > hi ? hi : v);
+
 class KrudevApp extends StatelessWidget {
   const KrudevApp({super.key});
 
@@ -40,28 +43,45 @@ class _EditorPageState extends State<EditorPage> {
   VideoPlayerController? _c;
   String? _path;
   final List<String> _history = [];
+  List<String?> _thumbs = [];
+  int _thumbToken = 0;
   double _total = 1;
   RangeValues _range = const RangeValues(0, 1);
   bool _busy = false;
   double _progress = 0;
   String _status = '';
+  final Stopwatch _seekWatch = Stopwatch()..start();
 
   void _msg(String t) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
   }
 
-  String _fmt(double s) => '${s.toStringAsFixed(1)}s';
+  String _fmt(double s) {
+    final m = s ~/ 60;
+    final sec = s - m * 60;
+    return '${m.toString().padLeft(2, '0')}:${sec.toStringAsFixed(1).padLeft(4, '0')}';
+  }
 
+  // Loops playback inside the selected range. No setState here,
+  // so the screen is not rebuilt on every video frame.
   void _onTick() {
     final c = _c;
-    if (c == null) return;
+    if (c == null || !c.value.isInitialized) return;
     final pos = c.value.position.inMilliseconds / 1000.0;
     if (c.value.isPlaying && pos >= _range.end) {
       c.pause();
       c.seekTo(Duration(milliseconds: (_range.start * 1000).round()));
     }
-    if (mounted) setState(() {});
+  }
+
+  void _seekTo(double sec, {bool force = false}) {
+    final c = _c;
+    if (c == null) return;
+    if (!force && _seekWatch.elapsedMilliseconds < 120) return;
+    _seekWatch.reset();
+    final s = _clampD(sec, 0.0, _total);
+    c.seekTo(Duration(milliseconds: (s * 1000).round()));
   }
 
   Future<void> _load(String path) async {
@@ -76,9 +96,35 @@ class _EditorPageState extends State<EditorPage> {
       _path = path;
       _total = total <= 0 ? 1 : total;
       _range = RangeValues(0, _total);
+      _thumbs = [];
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
     c.play();
+    _makeThumbs(path, c.value.aspectRatio);
+  }
+
+  Future<void> _makeThumbs(String path, double aspect) async {
+    final token = ++_thumbToken;
+    const count = 10;
+    const h = 120;
+    final totalMs = (_total * 1000).round();
+    final w = (h * (aspect <= 0 ? 1.0 : aspect)).round().clamp(60, 360).toInt();
+    setState(() => _thumbs = List<String?>.filled(count, null));
+    for (var i = 0; i < count; i++) {
+      if (!mounted || token != _thumbToken) return;
+      try {
+        final p = await VideoEditorBuilder(videoPath: path).generateThumbnail(
+          positionMs: ((i + 0.5) * totalMs / count).round(),
+          quality: 60,
+          width: w,
+          height: h,
+        );
+        if (!mounted || token != _thumbToken) return;
+        setState(() => _thumbs[i] = p);
+      } catch (_) {
+        // If a thumbnail fails, the timeline just shows a plain block.
+      }
+    }
   }
 
   Future<void> _pick() async {
@@ -88,7 +134,7 @@ class _EditorPageState extends State<EditorPage> {
       _history.clear();
       await _load(f.path);
     } catch (e) {
-      _msg('Video nahi khul paya: $e');
+      _msg('Could not open video: $e');
     }
   }
 
@@ -109,10 +155,10 @@ class _EditorPageState extends State<EditorPage> {
       final String? out = await editor.export(onProgress: (p) {
         if (mounted) setState(() => _progress = p);
       });
-      if (out == null) throw 'Output nahi bana';
+      if (out == null) throw 'No output file was created';
       _history.add(path);
       await _load(out);
-      _msg('$label ho gaya ✅');
+      _msg('$label done ✅');
     } catch (e) {
       _msg('Error: $e');
     } finally {
@@ -124,9 +170,9 @@ class _EditorPageState extends State<EditorPage> {
     try {
       final f = await ImagePicker().pickVideo(source: ImageSource.gallery);
       if (f == null) return;
-      await _run('Clip jodna', (b) => b.merge(otherVideoPaths: [f.path]));
+      await _run('Add clip', (b) => b.merge(otherVideoPaths: [f.path]));
     } catch (e) {
-      _msg('Video nahi khul paya: $e');
+      _msg('Could not open video: $e');
     }
   }
 
@@ -148,7 +194,7 @@ class _EditorPageState extends State<EditorPage> {
         await Gal.requestAccess();
       }
       await Gal.putVideo(path);
-      _msg('Gallery mein save ho gaya ✅');
+      _msg('Saved to gallery ✅');
     } catch (e) {
       _msg('Save error: $e');
     }
@@ -161,7 +207,7 @@ class _EditorPageState extends State<EditorPage> {
       c.pause();
     } else {
       final pos = c.value.position.inMilliseconds / 1000.0;
-      if (pos >= _range.end || pos < _range.start) {
+      if (pos >= _range.end - 0.05 || pos < _range.start) {
         c.seekTo(Duration(milliseconds: (_range.start * 1000).round()));
       }
       c.play();
@@ -217,6 +263,7 @@ class _EditorPageState extends State<EditorPage> {
 
   @override
   void dispose() {
+    _thumbToken++;
     _c?.removeListener(_onTick);
     _c?.dispose();
     super.dispose();
@@ -247,6 +294,7 @@ class _EditorPageState extends State<EditorPage> {
   Widget build(BuildContext context) {
     final c = _c;
     final off = _busy || c == null;
+    final dim = Theme.of(context).colorScheme.onSurfaceVariant;
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -255,7 +303,7 @@ class _EditorPageState extends State<EditorPage> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Naya project',
+            tooltip: 'New project',
             onPressed: _busy ? null : _pick,
             icon: const Icon(Icons.video_library_outlined),
           ),
@@ -286,23 +334,52 @@ class _EditorPageState extends State<EditorPage> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Start ${_fmt(_range.start)}'),
-                  Text('End ${_fmt(_range.end)}'),
+                  ValueListenableBuilder<VideoPlayerValue>(
+                    valueListenable: c,
+                    builder: (context, v, _) =>
+                        Text(_fmt(v.position.inMilliseconds / 1000.0)),
+                  ),
+                  Text(' / ${_fmt(_total)}',
+                      style: TextStyle(color: dim, fontSize: 12)),
+                  const Spacer(),
+                  ValueListenableBuilder<VideoPlayerValue>(
+                    valueListenable: c,
+                    builder: (context, v, _) => IconButton(
+                      iconSize: 32,
+                      onPressed: _toggle,
+                      icon: Icon(
+                        v.isPlaying
+                            ? Icons.pause_circle_filled
+                            : Icons.play_circle_fill,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text('Selected ${_fmt(_range.end - _range.start)}',
+                      style: TextStyle(color: dim, fontSize: 12)),
                 ],
               ),
             ),
-            RangeSlider(
-              min: 0,
-              max: _total,
-              values: _range,
-              onChanged: (v) {
-                final startMoved = v.start != _range.start;
-                setState(() => _range = v);
-                final t = startMoved ? v.start : v.end;
-                c.seekTo(Duration(milliseconds: (t * 1000).round()));
-              },
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _Timeline(
+                controller: c,
+                thumbs: _thumbs,
+                total: _total,
+                range: _range,
+                onRange: (r) => setState(() => _range = r),
+                onSeek: (s) => _seekTo(s),
+                onSeekEnd: (s) => _seekTo(s, force: true),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+              child: Text(
+                'Drag the orange handles to select a range. '
+                'Drag anywhere else to scrub.',
+                style: TextStyle(fontSize: 11, color: dim),
+              ),
             ),
           ],
           if (_busy)
@@ -399,3 +476,181 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 }
+
+enum _Drag { none, start, end, head }
+
+class _Timeline extends StatefulWidget {
+  const _Timeline({
+    required this.controller,
+    required this.thumbs,
+    required this.total,
+    required this.range,
+    required this.onRange,
+    required this.onSeek,
+    required this.onSeekEnd,
+  });
+
+  final VideoPlayerController controller;
+  final List<String?> thumbs;
+  final double total;
+  final RangeValues range;
+  final ValueChanged<RangeValues> onRange;
+  final ValueChanged<double> onSeek;
+  final ValueChanged<double> onSeekEnd;
+
+  @override
+  State<_Timeline> createState() => _TimelineState();
+}
+
+class _TimelineState extends State<_Timeline> {
+  static const double _minLen = 0.3;
+  _Drag _drag = _Drag.none;
+  double _lastSec = 0;
+
+  double _total() => widget.total <= 0 ? 1.0 : widget.total;
+
+  double _toSec(double x, double w) =>
+      _clampD(x / w, 0.0, 1.0) * _total();
+
+  void _start(double x, double w) {
+    final sx = widget.range.start / _total() * w;
+    final ex = widget.range.end / _total() * w;
+    final ds = (x - sx).abs();
+    final de = (x - ex).abs();
+    if (ds < 28 && ds <= de) {
+      _drag = _Drag.start;
+    } else if (de < 28) {
+      _drag = _Drag.end;
+    } else {
+      _drag = _Drag.head;
+      _lastSec = _toSec(x, w);
+      widget.onSeek(_lastSec);
+    }
+  }
+
+  void _update(double x, double w) {
+    final sec = _toSec(x, w);
+    final r = widget.range;
+    final total = _total();
+    if (_drag == _Drag.start) {
+      final s = _clampD(sec, 0.0, _clampD(r.end - _minLen, 0.0, total));
+      _lastSec = s;
+      widget.onRange(RangeValues(s, r.end));
+      widget.onSeek(s);
+    } else if (_drag == _Drag.end) {
+      final e = _clampD(sec, _clampD(r.start + _minLen, 0.0, total), total);
+      _lastSec = e;
+      widget.onRange(RangeValues(r.start, e));
+      widget.onSeek(e);
+    } else if (_drag == _Drag.head) {
+      _lastSec = sec;
+      widget.onSeek(sec);
+    }
+  }
+
+  void _end() {
+    final t = _lastSec;
+    final wasDrag = _drag != _Drag.none;
+    _drag = _Drag.none;
+    if (wasDrag) widget.onSeekEnd(t);
+  }
+
+  Widget _thumb(int i) {
+    final list = widget.thumbs;
+    final p = i < list.length ? list[i] : null;
+    if (p == null) return Container(color: Colors.white12);
+    return Image.file(
+      File(p),
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      errorBuilder: (context, error, stack) => Container(color: Colors.white12),
+    );
+  }
+
+  Widget _handle(Color accent) {
+    return IgnorePointer(
+      child: Container(
+        decoration: BoxDecoration(
+          color: accent,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Center(
+          child: Container(width: 2, height: 18, color: Colors.black54),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+    return LayoutBuilder(
+      builder: (context, box) {
+        final w = box.maxWidth;
+        final total = _total();
+        final sx = _clampD(widget.range.start / total * w, 0.0, w);
+        final ex = _clampD(widget.range.end / total * w, 0.0, w);
+        final slots = widget.thumbs.isEmpty ? 10 : widget.thumbs.length;
+        return SizedBox(
+          height: 72,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTapUp: (d) => widget.onSeekEnd(_toSec(d.localPosition.dx, w)),
+            onPanStart: (d) => _start(d.localPosition.dx, w),
+            onPanUpdate: (d) => _update(d.localPosition.dx, w),
+            onPanEnd: (_) => _end(),
+            onPanCancel: _end,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (var i = 0; i < slots; i++)
+                          Expanded(child: _thumb(i)),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: sx,
+                  child: const IgnorePointer(
+                    child: ColoredBox(color: Colors.black54),
+                  ),
+                ),
+                Positioned(
+                  left: ex,
+                  top: 0,
+                  bottom: 0,
+                  right: 0,
+                  child: const IgnorePointer(
+                    child: ColoredBox(color: Colors.black54),
+                  ),
+                ),
+                Positioned(
+                  left: sx,
+                  top: 0,
+                  bottom: 0,
+                  width: _clampD(ex - sx, 0.0, w),
+                  child: IgnorePointer(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        border: Border.symmetric(
+                          horizontal: BorderSide(color: accent, width: 3),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: sx - 7,
+                  top: -2,
+                  bottom: -2,
+                  width: 14,
+              
