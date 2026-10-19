@@ -1,6 +1,6 @@
 name: krudev
 description: Krudev video editing app
-publish_to: none
+publish_to: 'none'
 version: 1.0.0+1
 
 environment:
@@ -10,9 +10,11 @@ dependencies:
   flutter:
     sdk: flutter
   image_picker: ^1.1.2
-  video_player: ^2.9.2
-  flutter_native_video_trimmer: ^1.1.9
-  gal: ^2.3.0
+  video_player: ^2.8.2
+  flutter_native_video_trimmer: ^1.1.0
+  ffmpeg_kit_flutter_full_gpl: ^6.0.3
+  path_provider: ^2.1.1
+  video_editor: ^3.0.0
 
 dev_dependencies:
   flutter_launcher_icons: ^0.14.0
@@ -24,3 +26,6 @@ flutter_launcher_icons:
 
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/color_grade.frag
+    
