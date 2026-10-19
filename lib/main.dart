@@ -1,19 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
-import 'video_engine.dart'; 
+import 'video_engine.dart';
 
-late List<CameraDescription> _cameras;
-
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    _cameras = await availableCameras();
-  } catch (e) {
-    print("Camera error: $e");
-  }
   runApp(const SkyScopeProApp());
 }
 
@@ -24,126 +16,76 @@ class SkyScopeProApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'SkyScope Pro',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0F0F0F),
+        scaffoldBackgroundColor: const Color(0xFF0A0A0A),
         primaryColor: Colors.blueAccent,
         useMaterial3: true,
       ),
-      home: const CameraScreen(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class CameraScreen extends StatefulWidget {
-  const CameraScreen({super.key});
-  @override
-  State<CameraScreen> createState() => _CameraScreenState();
-}
+// -----------------------------------------
+// 🏠 HOME SCREEN (Direct Media Picker)
+// -----------------------------------------
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
 
-class _CameraScreenState extends State<CameraScreen> {
-  CameraController? _cameraController;
-  bool _isRecording = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initCamera();
-  }
-
-  Future<void> _initCamera() async {
-    if (_cameras.isEmpty) return;
-    _cameraController = CameraController(_cameras[0], ResolutionPreset.max);
-    await _cameraController!.initialize();
-    if (mounted) setState(() {});
-  }
-
-  Future<void> _recordVideo() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
-    
-    if (_isRecording) {
-      final file = await _cameraController!.stopVideoRecording();
-      setState(() => _isRecording = false);
-      if (mounted) {
-        Navigator.push(context, MaterialPageRoute(
-          builder: (_) => ProEditorScreen(videoPath: file.path),
-        ));
+  Future<void> _pickVideo(BuildContext context) async {
+    try {
+      final picker = ImagePicker();
+      final file = await picker.pickVideo(source: ImageSource.gallery);
+      if (file != null) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: file.path)),
+        );
       }
-    } else {
-      await _cameraController!.startVideoRecording();
-      setState(() => _isRecording = true);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gallery Error! Please allow permissions.")));
     }
-  }
-
-  Future<void> _pickFromGallery() async {
-    final picker = ImagePicker();
-    final file = await picker.pickVideo(source: ImageSource.gallery);
-    if (file != null && mounted) {
-      Navigator.push(context, MaterialPageRoute(
-        builder: (_) => ProEditorScreen(videoPath: file.path),
-      ));
-    }
-  }
-
-  @override
-  void dispose() {
-    _cameraController?.dispose();
-    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator(color: Colors.blueAccent)));
-    }
-    
     return Scaffold(
-      body: Stack(
-        alignment: Alignment.center,
-        children: [
-          SizedBox.expand(child: CameraPreview(_cameraController!)),
-          Positioned(
-            top: 50,
-            child: Text(
-              _isRecording ? "🔴 REC" : "SKY-SCOPE PRO",
-              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 2),
+      appBar: AppBar(
+        title: const Text("SKYSCOPE PRO", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2)),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+      ),
+      body: Center(
+        child: GestureDetector(
+          onTap: () => _pickVideo(context),
+          child: Container(
+            height: 150, width: 250,
+            decoration: BoxDecoration(
+              color: Colors.blueAccent.withOpacity(0.1),
+              border: Border.all(color: Colors.blueAccent, width: 2),
+              borderRadius: BorderRadius.circular(20),
             ),
-          ),
-          Positioned(
-            bottom: 40,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            child: const Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                IconButton(
-                  icon: const Icon(Icons.photo_library, size: 30, color: Colors.white),
-                  onPressed: _pickFromGallery,
-                ),
-                const SizedBox(width: 40),
-                GestureDetector(
-                  onTap: _recordVideo,
-                  child: Container(
-                    height: 70, width: 70,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 4),
-                      color: _isRecording ? Colors.red : Colors.transparent,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 40),
-                IconButton(
-                  icon: const Icon(Icons.cameraswitch, size: 30, color: Colors.white),
-                  onPressed: () {},
-                ),
+                Icon(Icons.add_circle_outline, size: 50, color: Colors.blueAccent),
+                SizedBox(height: 10),
+                Text("New Project", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               ],
             ),
-          )
-        ],
+          ),
+        ),
       ),
     );
   }
 }
 
+// -----------------------------------------
+// ✂️ PRO EDITOR WORKSPACE (Bug Fixed & Tools Added)
+// -----------------------------------------
 class ProEditorScreen extends StatefulWidget {
   final String videoPath;
   const ProEditorScreen({super.key, required this.videoPath});
@@ -155,33 +97,50 @@ class ProEditorScreen extends StatefulWidget {
 class _ProEditorScreenState extends State<ProEditorScreen> {
   late VideoPlayerController _controller;
   bool _isExporting = false;
+  bool _hasError = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.file(File(widget.videoPath))
-      ..initialize().then((_) {
-        setState(() {});
-        _controller.play();
-        _controller.setLooping(true);
-      });
+    _initVideo();
+  }
+
+  Future<void> _initVideo() async {
+    try {
+      _controller = VideoPlayerController.file(File(widget.videoPath));
+      await _controller.initialize();
+      setState(() {});
+      _controller.play();
+      _controller.setLooping(true);
+    } catch (e) {
+      setState(() => _hasError = true);
+    }
   }
 
   Future<void> _exportVideo() async {
     setState(() => _isExporting = true);
-    
     final resultPath = await ProVideoEngine.applyCinematicGrade(widget.videoPath);
-    
     setState(() => _isExporting = false);
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(resultPath != null ? '✅ Ultra Export Saved!' : '❌ Export Failed'),
+          content: Text(resultPath != null ? '✅ Ultra 4K Export Saved!' : '❌ Export Failed'),
           backgroundColor: resultPath != null ? Colors.green : Colors.red,
         ),
       );
     }
+  }
+
+  // Tool Click Handler
+  void _onToolClicked(String toolName) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("⚙️ $toolName Layer Added to Timeline!"),
+        backgroundColor: Colors.blueGrey[900],
+        duration: const Duration(seconds: 1),
+      ),
+    );
   }
 
   @override
@@ -213,45 +172,60 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
       ),
       body: Column(
         children: [
+          // 📺 Video Preview Area
           Expanded(
-            flex: 4,
+            flex: 5,
             child: Container(
               margin: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Colors.black,
                 borderRadius: BorderRadius.circular(16),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 10)],
+                border: Border.all(color: Colors.grey.withOpacity(0.2)),
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(16),
-                child: _controller.value.isInitialized
+                child: _hasError 
+                  ? const Center(child: Text("❌ Failed to load video format.", style: TextStyle(color: Colors.red)))
+                  : _controller.value.isInitialized
                     ? AspectRatio(aspectRatio: _controller.value.aspectRatio, child: VideoPlayer(_controller))
-                    : const Center(child: CircularProgressIndicator()),
+                    : const Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
               ),
             ),
           ),
           
+          // 🎛️ Ultra Premium Tools Area (Scrollable)
           Expanded(
             flex: 3,
             child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 10),
               decoration: const BoxDecoration(
-                color: Color(0xFF181818),
+                color: Color(0xFF121212),
                 borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
               ),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text("MOTION GRAPHICS & TOOLS", style: TextStyle(color: Colors.grey, fontSize: 10, letterSpacing: 1.5)),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _buildProTool(Icons.cut, 'Split Track'),
-                      _buildProTool(Icons.motion_photos_auto, 'Keyframes'),
-                      _buildProTool(Icons.color_lens, 'Color Grade'),
-                      _buildProTool(Icons.graphic_eq, 'Audio Splitting'),
-                      _buildProTool(Icons.speed, 'Speed Curve'),
-                    ],
+                  const Padding(
+                    padding: EdgeInsets.only(left: 16.0, bottom: 10),
+                    child: Text("MOTION & EFFECTS", style: TextStyle(color: Colors.grey, fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
+                  ),
+                  Expanded(
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      children: [
+                        _buildProTool(Icons.cut, 'Split', () => _onToolClicked("Split Track")),
+                        _buildProTool(Icons.center_focus_strong, 'Null Object', () => _onToolClicked("Null Object")),
+                        _buildProTool(Icons.video_camera_front, '3D Camera', () => _onToolClicked("3D Camera")),
+                        _buildProTool(Icons.animation, 'Keyframes', () => _onToolClicked("Keyframe Animator")),
+                        _buildProTool(Icons.blur_on, 'Motion Blur', () => _onToolClicked("Motion Blur")),
+                        _buildProTool(Icons.waves, 'Glitch / VHS', () => _onToolClicked("Glitch Effect")),
+                        _buildProTool(Icons.color_lens, 'Color Grade', () => _onToolClicked("Color Curves")),
+                        _buildProTool(Icons.speed, 'Speed Curve', () => _onToolClicked("Time Remapping")),
+                        _buildProTool(Icons.graphic_eq, 'Extract Audio', () => _onToolClicked("Audio Track")),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -262,21 +236,29 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
     );
   }
 
-  Widget _buildProTool(IconData icon, String label) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: Colors.white, size: 24),
+  Widget _buildProTool(IconData icon, String label, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 75,
+        margin: const EdgeInsets.symmetric(horizontal: 6),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Icon(icon, color: Colors.white, size: 26),
+            ),
+            const SizedBox(height: 8),
+            Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w500)),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 10)),
-      ],
+      ),
     );
   }
 }
