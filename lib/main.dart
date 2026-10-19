@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'video_engine.dart';
 
@@ -29,31 +29,26 @@ class KrudevApp extends StatelessWidget {
 }
 
 // -----------------------------------------
-// 🏠 HOME SCREEN (Direct File Picker)
+// 🏠 HOME SCREEN (Official Image Picker)
 // -----------------------------------------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   Future<void> _pickVideo(BuildContext context) async {
     try {
-      // 🚀 Bina kisi permission error ke direct File Manager khulega
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.single.path != null) {
-        if (context.mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: result.files.single.path!)),
-          );
-        }
+      final ImagePicker picker = ImagePicker();
+      final XFile? file = await picker.pickVideo(source: ImageSource.gallery);
+      
+      if (file != null && context.mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: file.path)),
+        );
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e"))
+          const SnackBar(content: Text("Action cancelled or gallery not available."))
         );
       }
     }
