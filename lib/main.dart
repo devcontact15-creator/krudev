@@ -653,4 +653,35 @@ class _TimelineState extends State<_Timeline> {
                   top: -2,
                   bottom: -2,
                   width: 14,
-              
+                                child: _handle(accent),
+                ),
+                Positioned(
+                  left: ex - 7,
+                  top: -2,
+                  bottom: -2,
+                  width: 14,
+                  child: _handle(accent),
+                ),
+                ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: widget.controller,
+                  builder: (context, v, _) {
+                    final px = v.position.inMilliseconds / 1000.0 / total * w;
+                    return Positioned(
+                      left: _clampD(px, 0.0, w) - 1,
+                      top: -6,
+                      bottom: -6,
+                      width: 2,
+                      child: const IgnorePointer(
+                        child: ColoredBox(color: Colors.white),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
