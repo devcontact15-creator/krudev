@@ -1,195 +1,154 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter_native_video_trimmer/flutter_native_video_trimmer.dart';
-import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
+import 'video_engine.dart'; 
 
-void main() => runApp(const KrudevApp());
+void main() => runApp(const UltraEditorApp());
 
-class KrudevApp extends StatelessWidget {
-  const KrudevApp({super.key});
+class UltraEditorApp extends StatelessWidget {
+  const UltraEditorApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Krudev',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true),
-      home: const EditorPage(),
+      theme: ThemeData.dark(),
+      home: const ProEditorScreen(),
     );
   }
 }
 
-class EditorPage extends StatefulWidget {
-  const EditorPage({super.key});
+class ProEditorScreen extends StatefulWidget {
+  const ProEditorScreen({super.key});
 
   @override
-  State<EditorPage> createState() => _EditorPageState();
+  State<ProEditorScreen> createState() => _ProEditorScreenState();
 }
 
-class _EditorPageState extends State<EditorPage> {
-  VideoPlayerController? _c;
-  String? _path;
-  double _total = 1;
-  RangeValues _range = const RangeValues(0, 1);
-  bool _busy = false;
+class _ProEditorScreenState extends State<ProEditorScreen> {
+  VideoPlayerController? _controller;
+  String? _videoPath;
+  bool _isExporting = false;
 
-  void _msg(String t) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
-  }
+  Future<void> _pickVideo() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickVideo(source: ImageSource.gallery);
 
-  String _fmt(double s) => '${s.toStringAsFixed(1)}s';
-
-  void _onTick() {
-    final c = _c;
-    if (c == null) return;
-    final pos = c.value.position.inMilliseconds / 1000.0;
-    if (c.value.isPlaying && pos >= _range.end) {
-      c.pause();
-      c.seekTo(Duration(milliseconds: (_range.start * 1000).round()));
+    if (pickedFile != null) {
+      setState(() {
+        _videoPath = pickedFile.path;
+      });
+      _initializeVideo();
     }
-    if (mounted) setState(() {});
   }
 
-  Future<void> _pick() async {
-    final f = await ImagePicker().pickVideo(source: ImageSource.gallery);
-    if (f == null) return;
-    _c?.removeListener(_onTick);
-    await _c?.dispose();
-    final c = VideoPlayerController.file(File(f.path));
-    await c.initialize();
-    final total = c.value.duration.inMilliseconds / 1000.0;
-    c.addListener(_onTick);
-    setState(() {
-      _c = c;
-      _path = f.path;
-      _total = total <= 0 ? 1 : total;
-      _range = RangeValues(0, _total);
-    });
-    c.play();
+  void _initializeVideo() {
+    _controller = VideoPlayerController.file(File(_videoPath!))
+      ..initialize().then((_) {
+        setState(() {});
+        _controller!.play();
+        _controller!.setLooping(true);
+      });
   }
 
-  Future<void> _trimAndSave() async {
-    final path = _path;
-    if (path == null) return;
-    setState(() => _busy = true);
-    try {
-      _c?.pause();
-      final trimmer = VideoTrimmer();
-      await trimmer.loadVideo(path);
-      final out = await trimmer.trimVideo(
-        startTimeMs: (_range.start * 1000).round(),
-        endTimeMs: (_range.end * 1000).round(),
+  Future<void> _exportProVideo() async {
+    if (_videoPath == null) return;
+    
+    setState(() => _isExporting = true);
+
+    final resultPath = await ProVideoEngine.applyCinematicGrade(_videoPath!);
+
+    setState(() => _isExporting = false);
+
+    if (resultPath != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Exported to: $resultPath')),
       );
-      if (out == null) throw 'Trim nahi hua';
-      if (!await Gal.hasAccess()) {
-        await Gal.requestAccess();
-      }
-      await Gal.putVideo(out);
-      _msg('Gallery mein save ho gaya ✅');
-    } catch (e) {
-      _msg('Error: $e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
+    } else {
+       ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Export Failed!')),
+      );
     }
   }
 
   @override
   void dispose() {
-    _c?.removeListener(_onTick);
-    _c?.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _c;
     return Scaffold(
-      appBar: AppBar(title: const Text('Krudev')),
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('SkyScope Pro Editor'),
+        backgroundColor: Colors.black87,
+        actions: [
+          if (_videoPath != null)
+            IconButton(
+              icon: const Icon(Icons.download, color: Colors.blue),
+              onPressed: _isExporting ? null : _exportProVideo,
+            )
+        ],
+      ),
       body: Column(
         children: [
           Expanded(
-            child: c == null
-                ? const Center(child: Text('Koi video nahi chuna'))
-                : Center(
-                    child: AspectRatio(
-                      aspectRatio: c.value.aspectRatio,
-                      child: VideoPlayer(c),
-                    ),
-                  ),
+            flex: 3,
+            child: Center(
+              child: _controller != null && _controller!.value.isInitialized
+                  ? AspectRatio(
+                      aspectRatio: _controller!.value.aspectRatio,
+                      child: VideoPlayer(_controller!),
+                    )
+                  : const Text('Pick a video to start editing', style: TextStyle(color: Colors.white54)),
+            ),
           ),
-          if (c != null) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Expanded(
+            flex: 2,
+            child: Container(
+              color: Colors.grey[900],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text('Start ${_fmt(_range.start)}'),
-                  Text('End ${_fmt(_range.end)}'),
+                  if (_isExporting) ...[
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 10),
+                    const Text('Applying Pro Effects...', style: TextStyle(color: Colors.white)),
+                  ] else ...[
+                     ElevatedButton.icon(
+                      icon: const Icon(Icons.add_a_photo),
+                      label: const Text('Import Media'),
+                      onPressed: _pickVideo,
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _buildToolIcon(Icons.cut, 'Split'),
+                        _buildToolIcon(Icons.color_lens, 'Color Grade'),
+                        _buildToolIcon(Icons.animation, 'Keyframes'),
+                        _buildToolIcon(Icons.audiotrack, 'Extract Audio'),
+                      ],
+                    )
+                  ]
                 ],
               ),
             ),
-            RangeSlider(
-              min: 0,
-              max: _total,
-              values: _range,
-              onChanged: (v) {
-                final startMoved = v.start != _range.start;
-                setState(() => _range = v);
-                final t = startMoved ? v.start : v.end;
-                c.seekTo(Duration(milliseconds: (t * 1000).round()));
-              },
-            ),
-          ],
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                FilledButton.icon(
-                  onPressed: _busy ? null : _pick,
-                  icon: const Icon(Icons.video_library),
-                  label: const Text('Video chuno'),
-                ),
-                if (c != null) ...[
-                  const SizedBox(width: 8),
-                  IconButton(
-                    onPressed: () {
-                      if (c.value.isPlaying) {
-                        c.pause();
-                      } else {
-                        final pos = c.value.position.inMilliseconds / 1000.0;
-                        if (pos >= _range.end || pos < _range.start) {
-                          c.seekTo(Duration(
-                              milliseconds: (_range.start * 1000).round()));
-                        }
-                        c.play();
-                      }
-                    },
-                    icon: Icon(
-                      c.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton.tonalIcon(
-                    onPressed: _busy ? null : _trimAndSave,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.content_cut),
-                    label: const Text('Trim + Save'),
-                  ),
-                ],
-              ],
-            ),
-          ),
+          )
         ],
       ),
+    );
+  }
+
+  Widget _buildToolIcon(IconData icon, String label) {
+    return Column(
+      children: [
+        IconButton(icon: Icon(icon, color: Colors.white70), onPressed: () {}),
+        Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+      ],
     );
   }
 }
