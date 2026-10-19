@@ -6,21 +6,22 @@ import 'video_engine.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const SkyScopeProApp());
+  runApp(const KrudevApp());
 }
 
-class SkyScopeProApp extends StatelessWidget {
-  const SkyScopeProApp({super.key});
+class KrudevApp extends StatelessWidget {
+  const KrudevApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SkyScope Pro',
+      title: 'Krudev',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0A0A0A),
-        primaryColor: Colors.blueAccent,
+        // एकदम प्रो लेवल डार्क-पिंक बैकग्राउंड
+        scaffoldBackgroundColor: const Color(0xFF1A0008), 
+        primaryColor: const Color(0xFFFFB6C1), // Baby Pink
         useMaterial3: true,
       ),
       home: const HomeScreen(),
@@ -29,7 +30,7 @@ class SkyScopeProApp extends StatelessWidget {
 }
 
 // -----------------------------------------
-// 🏠 HOME SCREEN (Direct Media Picker)
+// 🏠 HOME SCREEN (Baby Pink UI)
 // -----------------------------------------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -45,7 +46,9 @@ class HomeScreen extends StatelessWidget {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Gallery Error! Please allow permissions.")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Gallery Error! Please allow permissions from Settings."))
+      );
     }
   }
 
@@ -53,7 +56,7 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("SKYSCOPE PRO", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 2)),
+        title: const Text("KRUDEV", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 3, color: Color(0xFFFFB6C1))),
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
@@ -64,14 +67,21 @@ class HomeScreen extends StatelessWidget {
           child: Container(
             height: 150, width: 250,
             decoration: BoxDecoration(
-              color: Colors.blueAccent.withOpacity(0.1),
-              border: Border.all(color: Colors.blueAccent, width: 2),
+              color: const Color(0xFFFFB6C1).withOpacity(0.1),
+              border: Border.all(color: const Color(0xFFFFB6C1), width: 2),
               borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFFFB6C1).withOpacity(0.2),
+                  blurRadius: 15,
+                  spreadRadius: 2,
+                )
+              ]
             ),
             child: const Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.add_circle_outline, size: 50, color: Colors.blueAccent),
+                Icon(Icons.add_circle_outline, size: 50, color: Color(0xFFFFB6C1)),
                 SizedBox(height: 10),
                 Text("New Project", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
               ],
@@ -84,7 +94,7 @@ class HomeScreen extends StatelessWidget {
 }
 
 // -----------------------------------------
-// ✂️ PRO EDITOR WORKSPACE (Bug Fixed & Tools Added)
+// ✂️ PRO EDITOR WORKSPACE
 // -----------------------------------------
 class ProEditorScreen extends StatefulWidget {
   final String videoPath;
@@ -132,12 +142,11 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
     }
   }
 
-  // Tool Click Handler
   void _onToolClicked(String toolName) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text("⚙️ $toolName Layer Added to Timeline!"),
-        backgroundColor: Colors.blueGrey[900],
+        backgroundColor: const Color(0xFF330011),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -153,18 +162,19 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Workspace", style: TextStyle(fontSize: 16)),
+        title: const Text("Workspace", style: TextStyle(fontSize: 16, color: Color(0xFFFFB6C1))),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        iconTheme: const IconThemeData(color: Color(0xFFFFB6C1)),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12.0),
             child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFB6C1), foregroundColor: Colors.black),
               icon: _isExporting 
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
                   : const Icon(Icons.ios_share, size: 18),
-              label: Text(_isExporting ? "Rendering..." : "4K 120fps Export"),
+              label: Text(_isExporting ? "Rendering..." : "4K 120fps Export", style: const TextStyle(fontWeight: FontWeight.bold)),
               onPressed: _isExporting ? null : _exportVideo,
             ),
           )
@@ -172,7 +182,6 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
       ),
       body: Column(
         children: [
-          // 📺 Video Preview Area
           Expanded(
             flex: 5,
             child: Container(
@@ -180,35 +189,37 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
               decoration: BoxDecoration(
                 color: Colors.black,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey.withOpacity(0.2)),
+                border: Border.all(color: const Color(0xFFFFB6C1).withOpacity(0.3), width: 2),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFFFFB6C1).withOpacity(0.1), blurRadius: 10, spreadRadius: 1)
+                ]
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
                 child: _hasError 
                   ? const Center(child: Text("❌ Failed to load video format.", style: TextStyle(color: Colors.red)))
                   : _controller.value.isInitialized
                     ? AspectRatio(aspectRatio: _controller.value.aspectRatio, child: VideoPlayer(_controller))
-                    : const Center(child: CircularProgressIndicator(color: Colors.blueAccent)),
+                    : const Center(child: CircularProgressIndicator(color: Color(0xFFFFB6C1))),
               ),
             ),
           ),
           
-          // 🎛️ Ultra Premium Tools Area (Scrollable)
           Expanded(
             flex: 3,
             child: Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(vertical: 10),
               decoration: const BoxDecoration(
-                color: Color(0xFF121212),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                color: Color(0xFF1A0008),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Padding(
                     padding: EdgeInsets.only(left: 16.0, bottom: 10),
-                    child: Text("MOTION & EFFECTS", style: TextStyle(color: Colors.grey, fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
+                    child: Text("MOTION & EFFECTS", style: TextStyle(color: Color(0xFFFFB6C1), fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
                   ),
                   Expanded(
                     child: ListView(
@@ -248,11 +259,11 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
+                color: const Color(0xFFFFB6C1).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFFFFB6C1).withOpacity(0.3)),
               ),
-              child: Icon(icon, color: Colors.white, size: 26),
+              child: Icon(icon, color: const Color(0xFFFFB6C1), size: 26),
             ),
             const SizedBox(height: 8),
             Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w500)),
