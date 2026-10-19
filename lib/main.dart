@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'video_engine.dart';
 
@@ -19,9 +19,8 @@ class KrudevApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        // एकदम प्रो लेवल डार्क-पिंक बैकग्राउंड
         scaffoldBackgroundColor: const Color(0xFF1A0008), 
-        primaryColor: const Color(0xFFFFB6C1), // Baby Pink
+        primaryColor: const Color(0xFFFFB6C1), 
         useMaterial3: true,
       ),
       home: const HomeScreen(),
@@ -30,25 +29,33 @@ class KrudevApp extends StatelessWidget {
 }
 
 // -----------------------------------------
-// 🏠 HOME SCREEN (Baby Pink UI)
+// 🏠 HOME SCREEN (SAF File Picker - No Permissions Needed)
 // -----------------------------------------
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   Future<void> _pickVideo(BuildContext context) async {
     try {
-      final picker = ImagePicker();
-      final file = await picker.pickVideo(source: ImageSource.gallery);
-      if (file != null) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: file.path)),
-        );
+      // 🚀 Bina kisi permission ke direct File Manager open karega
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.video,
+        allowMultiple: false,
+      );
+
+      if (result != null && result.files.single.path != null) {
+        if (context.mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: result.files.single.path!)),
+          );
+        }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Gallery Error! Please allow permissions from Settings."))
-      );
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"))
+        );
+      }
     }
   }
 
@@ -94,7 +101,7 @@ class HomeScreen extends StatelessWidget {
 }
 
 // -----------------------------------------
-// ✂️ PRO EDITOR WORKSPACE
+// ✂️ PRO EDITOR WORKSPACE (Baby Pink)
 // -----------------------------------------
 class ProEditorScreen extends StatefulWidget {
   final String videoPath;
