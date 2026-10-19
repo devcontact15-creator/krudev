@@ -346,7 +346,7 @@ class _EditorPageState extends State<EditorPage> {
                         ? null
                         : () => _run(
                               'Rotate',
-                              degree90
+                              (b) => b.rotate(degree: RotationDegree.degree90),
                             ),
                   ),
                   _tool(
