@@ -1,13 +1,12 @@
 import 'dart:io';
+
+import 'package:easy_video_editor/easy_video_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
-import 'video_engine.dart';
 
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const KrudevApp());
-}
+void main() => runApp(const KrudevApp());
 
 class KrudevApp extends StatelessWidget {
   const KrudevApp({super.key});
@@ -18,259 +17,384 @@ class KrudevApp extends StatelessWidget {
       title: 'Krudev',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF1A0008), 
-        primaryColor: const Color(0xFFFFB6C1), 
         useMaterial3: true,
+        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFFF7A45),
+          brightness: Brightness.dark,
+        ),
       ),
-      home: const HomeScreen(),
+      home: const EditorPage(),
     );
   }
 }
 
-// -----------------------------------------
-// 🏠 HOME SCREEN (Official Image Picker)
-// -----------------------------------------
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class EditorPage extends StatefulWidget {
+  const EditorPage({super.key});
 
-  Future<void> _pickVideo(BuildContext context) async {
+  @override
+  State<EditorPage> createState() => _EditorPageState();
+}
+
+class _EditorPageState extends State<EditorPage> {
+  VideoPlayerController? _c;
+  String? _path;
+  final List<String> _history = [];
+  double _total = 1;
+  RangeValues _range = const RangeValues(0, 1);
+  bool _busy = false;
+  double _progress = 0;
+  String _status = '';
+
+  void _msg(String t) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(t)));
+  }
+
+  String _fmt(double s) => '${s.toStringAsFixed(1)}s';
+
+  void _onTick() {
+    final c = _c;
+    if (c == null) return;
+    final pos = c.value.position.inMilliseconds / 1000.0;
+    if (c.value.isPlaying && pos >= _range.end) {
+      c.pause();
+      c.seekTo(Duration(milliseconds: (_range.start * 1000).round()));
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _load(String path) async {
+    final old = _c;
+    old?.removeListener(_onTick);
+    final c = VideoPlayerController.file(File(path));
+    await c.initialize();
+    final total = c.value.duration.inMilliseconds / 1000.0;
+    c.addListener(_onTick);
+    setState(() {
+      _c = c;
+      _path = path;
+      _total = total <= 0 ? 1 : total;
+      _range = RangeValues(0, _total);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => old?.dispose());
+    c.play();
+  }
+
+  Future<void> _pick() async {
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? file = await picker.pickVideo(source: ImageSource.gallery);
-      
-      if (file != null && context.mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => ProEditorScreen(videoPath: file.path)),
-        );
-      }
+      final f = await ImagePicker().pickVideo(source: ImageSource.gallery);
+      if (f == null) return;
+      _history.clear();
+      await _load(f.path);
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Action cancelled or gallery not available."))
-        );
+      _msg('Video nahi khul paya: $e');
+    }
+  }
+
+  Future<void> _run(
+    String label,
+    VideoEditorBuilder Function(VideoEditorBuilder b) apply,
+  ) async {
+    final path = _path;
+    if (path == null || _busy) return;
+    setState(() {
+      _busy = true;
+      _progress = 0;
+      _status = label;
+    });
+    try {
+      _c?.pause();
+      final editor = apply(VideoEditorBuilder(videoPath: path));
+      final String? out = await editor.export(onProgress: (p) {
+        if (mounted) setState(() => _progress = p);
+      });
+      if (out == null) throw 'Output nahi bana';
+      _history.add(path);
+      await _load(out);
+      _msg('$label ho gaya ✅');
+    } catch (e) {
+      _msg('Error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _addClip() async {
+    try {
+      final f = await ImagePicker().pickVideo(source: ImageSource.gallery);
+      if (f == null) return;
+      await _run('Clip jodna', (b) => b.merge(otherVideoPaths: [f.path]));
+    } catch (e) {
+      _msg('Video nahi khul paya: $e');
+    }
+  }
+
+  Future<void> _undo() async {
+    if (_history.isEmpty || _busy) return;
+    final prev = _history.removeLast();
+    try {
+      await _load(prev);
+    } catch (e) {
+      _msg('Undo error: $e');
+    }
+  }
+
+  Future<void> _save() async {
+    final path = _path;
+    if (path == null || _busy) return;
+    try {
+      if (!await Gal.hasAccess()) {
+        await Gal.requestAccess();
       }
+      await Gal.putVideo(path);
+      _msg('Gallery mein save ho gaya ✅');
+    } catch (e) {
+      _msg('Save error: $e');
+    }
+  }
+
+  void _toggle() {
+    final c = _c;
+    if (c == null) return;
+    if (c.value.isPlaying) {
+      c.pause();
+    } else {
+      final pos = c.value.position.inMilliseconds / 1000.0;
+      if (pos >= _range.end || pos < _range.start) {
+        c.seekTo(Duration(milliseconds: (_range.start * 1000).round()));
+      }
+      c.play();
+    }
+  }
+
+  Future<void> _speedSheet() async {
+    final s = await showModalBottomSheet<double>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [0.5, 0.75, 1.5, 2.0]
+              .map((v) => ListTile(
+                    title: Text('${v}x'),
+                    onTap: () => Navigator.pop(ctx, v),
+                  ))
+              .toList(),
+        ),
+      ),
+    );
+    if (s != null) {
+      await _run('Speed ${s}x', (b) => b.speed(speed: s));
+    }
+  }
+
+  Future<void> _cropSheet() async {
+    final options = <String, VideoAspectRatio>{
+      '9:16 (Reels / Shorts)': VideoAspectRatio.ratio9x16,
+      '1:1 (Square)': VideoAspectRatio.ratio1x1,
+      '16:9 (Widescreen)': VideoAspectRatio.ratio16x9,
+      '4:3': VideoAspectRatio.ratio4x3,
+      '3:4': VideoAspectRatio.ratio3x4,
+    };
+    final r = await showModalBottomSheet<VideoAspectRatio>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: options.entries
+              .map((e) => ListTile(
+                    title: Text(e.key),
+                    onTap: () => Navigator.pop(ctx, e.value),
+                  ))
+              .toList(),
+        ),
+      ),
+    );
+    if (r != null) {
+      await _run('Crop', (b) => b.crop(aspectRatio: r));
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("KRUDEV", style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 3, color: Color(0xFFFFB6C1))),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-      ),
-      body: Center(
-        child: GestureDetector(
-          onTap: () => _pickVideo(context),
-          child: Container(
-            height: 150, width: 250,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFB6C1).withOpacity(0.1),
-              border: Border.all(color: const Color(0xFFFFB6C1), width: 2),
-              borderRadius: BorderRadius.circular(20),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFFFB6C1).withOpacity(0.2),
-                  blurRadius: 15,
-                  spreadRadius: 2,
-                )
-              ]
-            ),
-            child: const Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.add_circle_outline, size: 50, color: Color(0xFFFFB6C1)),
-                SizedBox(height: 10),
-                Text("New Project", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-              ],
-            ),
+  void dispose() {
+    _c?.removeListener(_onTick);
+    _c?.dispose();
+    super.dispose();
+  }
+
+  Widget _tool(IconData icon, String label, VoidCallback? onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Opacity(
+        opacity: onTap == null ? 0.4 : 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon),
+              const SizedBox(height: 4),
+              Text(label, style: const TextStyle(fontSize: 11)),
+            ],
           ),
         ),
       ),
     );
   }
-}
-
-// -----------------------------------------
-// ✂️ PRO EDITOR WORKSPACE (Baby Pink)
-// -----------------------------------------
-class ProEditorScreen extends StatefulWidget {
-  final String videoPath;
-  const ProEditorScreen({super.key, required this.videoPath});
-
-  @override
-  State<ProEditorScreen> createState() => _ProEditorScreenState();
-}
-
-class _ProEditorScreenState extends State<ProEditorScreen> {
-  late VideoPlayerController _controller;
-  bool _isExporting = false;
-  bool _hasError = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initVideo();
-  }
-
-  Future<void> _initVideo() async {
-    try {
-      _controller = VideoPlayerController.file(File(widget.videoPath));
-      await _controller.initialize();
-      setState(() {});
-      _controller.play();
-      _controller.setLooping(true);
-    } catch (e) {
-      setState(() => _hasError = true);
-    }
-  }
-
-  Future<void> _exportVideo() async {
-    setState(() => _isExporting = true);
-    final resultPath = await ProVideoEngine.applyCinematicGrade(widget.videoPath);
-    setState(() => _isExporting = false);
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(resultPath != null ? '✅ Ultra 4K Export Saved!' : '❌ Export Failed'),
-          backgroundColor: resultPath != null ? Colors.green : Colors.red,
-        ),
-      );
-    }
-  }
-
-  void _onToolClicked(String toolName) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("⚙️ $toolName Layer Added to Timeline!"),
-        backgroundColor: const Color(0xFF330011),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
+    final c = _c;
+    final off = _busy || c == null;
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Workspace", style: TextStyle(fontSize: 16, color: Color(0xFFFFB6C1))),
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Color(0xFFFFB6C1)),
+        title: const Text(
+          'KRUDEV',
+          style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold),
+        ),
         actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12.0),
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFB6C1), foregroundColor: Colors.black),
-              icon: _isExporting 
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2))
-                  : const Icon(Icons.ios_share, size: 18),
-              label: Text(_isExporting ? "Rendering..." : "4K 120fps Export", style: const TextStyle(fontWeight: FontWeight.bold)),
-              onPressed: _isExporting ? null : _exportVideo,
-            ),
-          )
+          IconButton(
+            tooltip: 'Naya project',
+            onPressed: _busy ? null : _pick,
+            icon: const Icon(Icons.video_library_outlined),
+          ),
         ],
       ),
       body: Column(
         children: [
           Expanded(
-            flex: 5,
-            child: Container(
-              margin: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFFFB6C1).withOpacity(0.3), width: 2),
-                boxShadow: [
-                  BoxShadow(color: const Color(0xFFFFB6C1).withOpacity(0.1), blurRadius: 10, spreadRadius: 1)
-                ]
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: _hasError 
-                  ? const Center(child: Text("❌ Failed to load video format.", style: TextStyle(color: Colors.red)))
-                  : _controller.value.isInitialized
-                    ? AspectRatio(aspectRatio: _controller.value.aspectRatio, child: VideoPlayer(_controller))
-                    : const Center(child: CircularProgressIndicator(color: Color(0xFFFFB6C1))),
-              ),
-            ),
-          ),
-          
-          Expanded(
-            flex: 3,
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              decoration: const BoxDecoration(
-                color: Color(0xFF1A0008),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(left: 16.0, bottom: 10),
-                    child: Text("MOTION & EFFECTS", style: TextStyle(color: Color(0xFFFFB6C1), fontSize: 11, letterSpacing: 1.5, fontWeight: FontWeight.bold)),
-                  ),
-                  Expanded(
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      children: [
-                        _buildProTool(Icons.cut, 'Split', () => _onToolClicked("Split Track")),
-                        _buildProTool(Icons.center_focus_strong, 'Null Object', () => _onToolClicked("Null Object")),
-                        _buildProTool(Icons.video_camera_front, '3D Camera', () => _onToolClicked("3D Camera")),
-                        _buildProTool(Icons.animation, 'Keyframes', () => _onToolClicked("Keyframe Animator")),
-                        _buildProTool(Icons.blur_on, 'Motion Blur', () => _onToolClicked("Motion Blur")),
-                        _buildProTool(Icons.waves, 'Glitch / VHS', () => _onToolClicked("Glitch Effect")),
-                        _buildProTool(Icons.color_lens, 'Color Grade', () => _onToolClicked("Color Curves")),
-                        _buildProTool(Icons.speed, 'Speed Curve', () => _onToolClicked("Time Remapping")),
-                        _buildProTool(Icons.graphic_eq, 'Extract Audio', () => _onToolClicked("Audio Track")),
-                      ],
+            child: c == null
+                ? Center(
+                    child: FilledButton.icon(
+                      onPressed: _busy ? null : _pick,
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('New Project'),
+                    ),
+                  )
+                : GestureDetector(
+                    onTap: _toggle,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: c.value.aspectRatio,
+                        child: VideoPlayer(c),
+                      ),
                     ),
                   ),
+          ),
+          if (c != null && !_busy) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Start ${_fmt(_range.start)}'),
+                  Text('End ${_fmt(_range.end)}'),
+                ],
+              ),
+            ),
+            RangeSlider(
+              min: 0,
+              max: _total,
+              values: _range,
+              onChanged: (v) {
+                final startMoved = v.start != _range.start;
+                setState(() => _range = v);
+                final t = startMoved ? v.start : v.end;
+                c.seekTo(Duration(milliseconds: (t * 1000).round()));
+              },
+            ),
+          ],
+          if (_busy)
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Text('$_status...'),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: _progress > 0 ? _progress : null,
+                  ),
+                ],
+              ),
+            ),
+          SafeArea(
+            top: false,
+            child: SizedBox(
+              height: 84,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _tool(
+                    Icons.content_cut,
+                    'Trim',
+                    off
+                        ? null
+                        : () => _run(
+                              'Trim',
+                              (b) => b.trim(
+                                startTimeMs: (_range.start * 1000).round(),
+                                endTimeMs: (_range.end * 1000).round(),
+                              ),
+                            ),
+                  ),
+                  _tool(Icons.speed, 'Speed', off ? null : _speedSheet),
+                  _tool(
+                    Icons.rotate_right,
+                    'Rotate',
+                    off
+                        ? null
+                        : () => _run(
+                              'Rotate',
+                              (b) => b.rotate(degree: RotationDegree.d90),
+                            ),
+                  ),
+                  _tool(
+                    Icons.flip,
+                    'Flip H',
+                    off
+                        ? null
+                        : () => _run(
+                              'Flip',
+                              (b) => b.flip(
+                                flipDirection: FlipDirection.horizontal,
+                              ),
+                            ),
+                  ),
+                  _tool(
+                    Icons.swap_vert,
+                    'Flip V',
+                    off
+                        ? null
+                        : () => _run(
+                              'Flip',
+                              (b) => b.flip(
+                                flipDirection: FlipDirection.vertical,
+                              ),
+                            ),
+                  ),
+                  _tool(Icons.crop, 'Crop', off ? null : _cropSheet),
+                  _tool(
+                    Icons.volume_off,
+                    'Mute',
+                    off ? null : () => _run('Mute', (b) => b.removeAudio()),
+                  ),
+                  _tool(
+                    Icons.add_box_outlined,
+                    'Add clip',
+                    off ? null : _addClip,
+                  ),
+                  _tool(
+                    Icons.undo,
+                    'Undo',
+                    (off || _history.isEmpty) ? null : _undo,
+                  ),
+                  _tool(Icons.save_alt, 'Save', off ? null : _save),
                 ],
               ),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildProTool(IconData icon, String label, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 75,
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFB6C1).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFFFB6C1).withOpacity(0.3)),
-              ),
-              child: Icon(icon, color: const Color(0xFFFFB6C1), size: 26),
-            ),
-            const SizedBox(height: 8),
-            Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w500)),
-          ],
-        ),
       ),
     );
   }
