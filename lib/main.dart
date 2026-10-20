@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:easy_video_editor/easy_video_editor.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
@@ -10,6 +12,14 @@ void main() => runApp(const KrudevApp());
 
 double _clampD(double v, double lo, double hi) =>
     v < lo ? lo : (v > hi ? hi : v);
+
+class _Pal {
+  static const bg = Color(0xFF0D0D12);
+  static const panel = Color(0xFF16161E);
+  static const panel2 = Color(0xFF20202B);
+  static const accent = Color(0xFF8B7CFF);
+  static const line = Color(0x1FFFFFFF);
+}
 
 class KrudevApp extends StatelessWidget {
   const KrudevApp({super.key});
@@ -22,15 +32,64 @@ class KrudevApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
+        scaffoldBackgroundColor: _Pal.bg,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF7A45),
+          seedColor: _Pal.accent,
           brightness: Brightness.dark,
+        ).copyWith(primary: _Pal.accent, surface: _Pal.panel),
+        sliderTheme: const SliderThemeData(
+          trackHeight: 3,
+          thumbShape: RoundSliderThumbShape(enabledThumbRadius: 7),
+          overlayShape: RoundSliderOverlayShape(overlayRadius: 16),
+        ),
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _Pal.panel2,
+          contentTextStyle: TextStyle(color: Colors.white),
         ),
       ),
       home: const EditorPage(),
     );
   }
 }
+
+/// A text layer. Position is the layer centre as a fraction of the video
+/// (0..1), size is a fraction of the video height, so it does not depend on
+/// the phone screen size.
+class TextLayer {
+  TextLayer({
+    required this.id,
+    required this.text,
+    required this.start,
+    required this.end,
+  });
+
+  final int id;
+  String text;
+  double start;
+  double end;
+  double x = 0.5;
+  double y = 0.5;
+  double size = 0.06;
+  double rotation = 0;
+  double opacity = 1;
+  Color color = Colors.white;
+  bool bold = true;
+
+  TextLayer copy(int newId) {
+    final l = TextLayer(id: newId, text: text, start: start, end: end);
+    l.x = x;
+    l.y = _clampD(y + 0.08, 0.0, 1.0);
+    l.size = size;
+    l.rotation = rotation;
+    l.opacity = opacity;
+    l.color = color;
+    l.bold = bold;
+    return l;
+  }
+}
+
+enum _Mode { edit, text }
 
 class EditorPage extends StatefulWidget {
   const EditorPage({super.key});
@@ -51,6 +110,20 @@ class _EditorPageState extends State<EditorPage> {
   double _progress = 0;
   String _status = '';
   final Stopwatch _seekWatch = Stopwatch()..start();
+
+  _Mode _mode = _Mode.edit;
+  final List<TextLayer> _layers = [];
+  int? _selected;
+  int _nextId = 1;
+  double _baseSize = 0.06;
+  double _baseRot = 0;
+
+  TextLayer? get _selectedLayer {
+    for (final l in _layers) {
+      if (l.id == _selected) return l;
+    }
+    return null;
+  }
 
   void _msg(String t) {
     if (!mounted) return;
@@ -132,6 +205,8 @@ class _EditorPageState extends State<EditorPage> {
       final f = await ImagePicker().pickVideo(source: ImageSource.gallery);
       if (f == null) return;
       _history.clear();
+      _layers.clear();
+      _selected = null;
       await _load(f.path);
     } catch (e) {
       _msg('Could not open video: $e');
@@ -189,6 +264,30 @@ class _EditorPageState extends State<EditorPage> {
   Future<void> _save() async {
     final path = _path;
     if (path == null || _busy) return;
+    if (_layers.isNotEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: _Pal.panel,
+          title: const Text('Text layers not included'),
+          content: const Text(
+            'Exporting text layers into the video is coming in the next '
+            'update. Save the video without them?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Save anyway'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
     try {
       if (!await Gal.hasAccess()) {
         await Gal.requestAccess();
@@ -217,6 +316,7 @@ class _EditorPageState extends State<EditorPage> {
   Future<void> _speedSheet() async {
     final s = await showModalBottomSheet<double>(
       context: context,
+      backgroundColor: _Pal.panel,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -244,6 +344,7 @@ class _EditorPageState extends State<EditorPage> {
     };
     final r = await showModalBottomSheet<VideoAspectRatio>(
       context: context,
+      backgroundColor: _Pal.panel,
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -261,6 +362,279 @@ class _EditorPageState extends State<EditorPage> {
     }
   }
 
+  // ---------------------------------------------------------------- layers
+
+  Future<String?> _askText(String initial) {
+    final ctrl = TextEditingController(text: initial);
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _Pal.panel,
+        title: const Text('Text'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLines: null,
+          decoration: const InputDecoration(hintText: 'Type your text'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addText() async {
+    final c = _c;
+    if (c == null) return;
+    final text = await _askText('');
+    if (text == null || text.trim().isEmpty) return;
+    final t = c.value.position.inMilliseconds / 1000.0;
+    var start = _clampD(t, 0.0, _total);
+    var end = start + 3;
+    if (end > _total) {
+      end = _total;
+      start = _clampD(end - 3, 0.0, end);
+    }
+    final layer = TextLayer(
+      id: _nextId++,
+      text: text.trim(),
+      start: start,
+      end: end,
+    );
+    setState(() {
+      _layers.add(layer);
+      _selected = layer.id;
+    });
+  }
+
+  Future<void> _editText() async {
+    final l = _selectedLayer;
+    if (l == null) return;
+    final text = await _askText(l.text);
+    if (text == null || text.trim().isEmpty) return;
+    setState(() => l.text = text.trim());
+  }
+
+  void _duplicateLayer() {
+    final l = _selectedLayer;
+    if (l == null) return;
+    final copy = l.copy(_nextId++);
+    setState(() {
+      _layers.add(copy);
+      _selected = copy.id;
+    });
+  }
+
+  void _deleteLayer() {
+    final l = _selectedLayer;
+    if (l == null) return;
+    setState(() {
+      _layers.remove(l);
+      _selected = null;
+    });
+  }
+
+  Future<void> _styleSheet() async {
+    final l = _selectedLayer;
+    if (l == null) return;
+    const swatches = <Color>[
+      Colors.white,
+      Colors.black,
+      Colors.yellow,
+      Colors.redAccent,
+      Colors.lightBlueAccent,
+      Colors.greenAccent,
+      Color(0xFFFF7A45),
+      Color(0xFF8B7CFF),
+    ];
+    await showModalBottomSheet<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      backgroundColor: _Pal.panel,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          void upd(VoidCallback f) {
+            f();
+            setSheet(() {});
+            setState(() {});
+          }
+
+          Widget slider(
+            String label,
+            double value,
+            double min,
+            double max,
+            String shown,
+            ValueChanged<double> onChanged,
+          ) {
+            return Row(
+              children: [
+                SizedBox(width: 64, child: Text(label)),
+                Expanded(
+                  child: Slider(
+                    value: _clampD(value, min, max),
+                    min: min,
+                    max: max,
+                    onChanged: onChanged,
+                  ),
+                ),
+                SizedBox(
+                  width: 48,
+                  child: Text(shown, textAlign: TextAlign.end),
+                ),
+              ],
+            );
+          }
+
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  slider(
+                    'Size',
+                    l.size,
+                    0.02,
+                    0.3,
+                    '${(l.size * 100).round()}',
+                    (v) => upd(() => l.size = v),
+                  ),
+                  slider(
+                    'Rotate',
+                    l.rotation * 180 / math.pi,
+                    -180,
+                    180,
+                    '${(l.rotation * 180 / math.pi).round()}°',
+                    (v) => upd(() => l.rotation = v * math.pi / 180),
+                  ),
+                  slider(
+                    'Opacity',
+                    l.opacity,
+                    0.1,
+                    1,
+                    '${(l.opacity * 100).round()}%',
+                    (v) => upd(() => l.opacity = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (final col in swatches)
+                          GestureDetector(
+                            onTap: () => upd(() => l.color = col),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 150),
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: col,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: l.color == col
+                                      ? Colors.white
+                                      : Colors.white24,
+                                  width: l.color == col ? 3 : 1,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      const Text('Bold'),
+                      const Spacer(),
+                      Switch(
+                        value: l.bold,
+                        onChanged: (v) => upd(() => l.bold = v),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _scaleStart(ScaleStartDetails d) {
+    final l = _selectedLayer;
+    if (l == null) return;
+    _baseSize = l.size;
+    _baseRot = l.rotation;
+  }
+
+  void _scaleUpdate(ScaleUpdateDetails d, double w, double h) {
+    final l = _selectedLayer;
+    final c = _c;
+    if (l == null || c == null || _busy) return;
+    final t = c.value.position.inMilliseconds / 1000.0;
+    if (t < l.start || t > l.end) return;
+    setState(() {
+      l.x = _clampD(l.x + d.focalPointDelta.dx / w, 0.0, 1.0);
+      l.y = _clampD(l.y + d.focalPointDelta.dy / h, 0.0, 1.0);
+      if (d.scale != 1.0 || d.rotation != 0.0) {
+        l.size = _clampD(_baseSize * d.scale, 0.02, 0.3);
+        l.rotation = _baseRot + d.rotation;
+      }
+    });
+  }
+
+  Widget _layerView(TextLayer l, double w, double h) {
+    final selected = l.id == _selected;
+    return Positioned.fill(
+      child: CustomSingleChildLayout(
+        delegate: _CenterAt(l.x, l.y),
+        child: Transform.rotate(
+          angle: l.rotation,
+          child: Opacity(
+            opacity: l.opacity,
+            child: GestureDetector(
+              onTap: () => setState(() => _selected = l.id),
+              child: Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  border: selected
+                      ? Border.all(color: _Pal.accent, width: 1.5)
+                      : null,
+                ),
+                child: Text(
+                  l.text,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: l.color,
+                    fontSize: l.size * h,
+                    height: 1.15,
+                    fontWeight: l.bold ? FontWeight.w800 : FontWeight.w500,
+                    shadows: const [
+                      Shadow(blurRadius: 6, color: Colors.black54),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _thumbToken++;
@@ -269,20 +643,39 @@ class _EditorPageState extends State<EditorPage> {
     super.dispose();
   }
 
-  Widget _tool(IconData icon, String label, VoidCallback? onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Opacity(
-        opacity: onTap == null ? 0.4 : 1,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Column(
+  // -------------------------------------------------------------------- UI
+
+  Widget _emptyState() {
+    return Center(
+      child: GestureDetector(
+        onTap: _busy ? null : _pick,
+        child: Container(
+          width: 240,
+          padding: const EdgeInsets.symmetric(vertical: 36),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: const LinearGradient(
+              colors: [Color(0xFF2A2250), Color(0xFF16161E)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            border: Border.all(color: _Pal.accent.withAlpha(120)),
+          ),
+          child: const Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon),
-              const SizedBox(height: 4),
-              Text(label, style: const TextStyle(fontSize: 11)),
+              Icon(Icons.add_circle_outline_rounded,
+                  size: 44, color: _Pal.accent),
+              SizedBox(height: 14),
+              Text(
+                'New Project',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'Import a video to start',
+                style: TextStyle(fontSize: 12, color: Colors.white54),
+              ),
             ],
           ),
         ),
@@ -290,188 +683,437 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
+  Widget _preview(VideoPlayerController c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: c.value.aspectRatio,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: LayoutBuilder(
+              builder: (context, box) {
+                final w = box.maxWidth;
+                final h = box.maxHeight;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _toggle,
+                  onScaleStart: _scaleStart,
+                  onScaleUpdate: (d) => _scaleUpdate(d, w, h),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      VideoPlayer(c),
+                      ValueListenableBuilder<VideoPlayerValue>(
+                        valueListenable: c,
+                        builder: (context, v, _) {
+                          final t = v.position.inMilliseconds / 1000.0;
+                          return Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              for (final l in _layers)
+                                if (t >= l.start && t <= l.end)
+                                  _layerView(l, w, h),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _transport(VideoPlayerController c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+      child: Row(
+        children: [
+          ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: c,
+            builder: (context, v, _) => Text(
+              _fmt(v.position.inMilliseconds / 1000.0),
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Text(
+            ' / ${_fmt(_total)}',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          const Spacer(),
+          ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: c,
+            builder: (context, v, _) => IconButton.filledTonal(
+              onPressed: _toggle,
+              icon: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 150),
+                child: Icon(
+                  v.isPlaying
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  key: ValueKey(v.isPlaying),
+                ),
+              ),
+            ),
+          ),
+          const Spacer(),
+          Text(
+            'Range ${_fmt(_range.end - _range.start)}',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _timelinePanel(VideoPlayerController c) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: BoxDecoration(
+        color: _Pal.panel,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _Pal.line),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _Timeline(
+            controller: c,
+            thumbs: _thumbs,
+            total: _total,
+            range: _range,
+            onRange: (r) => setState(() => _range = r),
+            onSeek: (s) => _seekTo(s),
+            onSeekEnd: (s) => _seekTo(s, force: true),
+          ),
+          _LayerRows(
+            controller: c,
+            layers: _layers,
+            total: _total,
+            selected: _selected,
+            onSelect: (id) => setState(() => _selected = id),
+            onToggle: (id) =>
+                setState(() => _selected = _selected == id ? null : id),
+            onChanged: () => setState(() {}),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _busyPanel() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _Pal.panel,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _Pal.line),
+      ),
+      child: Column(
+        children: [
+          Text('$_status...'),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              minHeight: 6,
+              value: _progress > 0 ? _progress : null,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeTabs() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: SizedBox(
+        width: double.infinity,
+        child: SegmentedButton<_Mode>(
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(
+              value: _Mode.edit,
+              icon: Icon(Icons.tune_rounded, size: 18),
+              label: Text('Edit'),
+            ),
+            ButtonSegment(
+              value: _Mode.text,
+              icon: Icon(Icons.text_fields_rounded, size: 18),
+              label: Text('Text'),
+            ),
+          ],
+          selected: {_mode},
+          onSelectionChanged: (s) => setState(() => _mode = s.first),
+        ),
+      ),
+    );
+  }
+
+  Widget _editTools(bool off) {
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      children: [
+        _ToolButton(
+          icon: Icons.content_cut_rounded,
+          label: 'Trim',
+          onTap: off
+              ? null
+              : () => _run(
+                    'Trim',
+                    (b) => b.trim(
+                      startTimeMs: (_range.start * 1000).round(),
+                      endTimeMs: (_range.end * 1000).round(),
+                    ),
+                  ),
+        ),
+        _ToolButton(
+          icon: Icons.speed_rounded,
+          label: 'Speed',
+          onTap: off ? null : _speedSheet,
+        ),
+        _ToolButton(
+          icon: Icons.rotate_right_rounded,
+          label: 'Rotate',
+          onTap: off
+              ? null
+              : () => _run(
+                    'Rotate',
+                    (b) => b.rotate(degree: RotationDegree.degree90),
+                  ),
+        ),
+        _ToolButton(
+          icon: Icons.flip_rounded,
+          label: 'Flip H',
+          onTap: off
+              ? null
+              : () => _run(
+                    'Flip',
+                    (b) => b.flip(flipDirection: FlipDirection.horizontal),
+                  ),
+        ),
+        _ToolButton(
+          icon: Icons.swap_vert_rounded,
+          label: 'Flip V',
+          onTap: off
+              ? null
+              : () => _run(
+                    'Flip',
+                    (b) => b.flip(flipDirection: FlipDirection.vertical),
+                  ),
+        ),
+        _ToolButton(
+          icon: Icons.crop_rounded,
+          label: 'Crop',
+          onTap: off ? null : _cropSheet,
+        ),
+        _ToolButton(
+          icon: Icons.volume_off_rounded,
+          label: 'Mute',
+          onTap: off ? null : () => _run('Mute', (b) => b.removeAudio()),
+        ),
+        _ToolButton(
+          icon: Icons.add_box_rounded,
+          label: 'Add clip',
+          onTap: off ? null : _addClip,
+        ),
+        _ToolButton(
+          icon: Icons.undo_rounded,
+          label: 'Undo',
+          onTap: (off || _history.isEmpty) ? null : _undo,
+        ),
+      ],
+    );
+  }
+
+  Widget _textTools(bool off) {
+    final has = _selectedLayer != null;
+    return ListView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      children: [
+        _ToolButton(
+          icon: Icons.title_rounded,
+          label: 'Add text',
+          onTap: off ? null : _addText,
+        ),
+        _ToolButton(
+          icon: Icons.edit_rounded,
+          label: 'Edit',
+          onTap: (off || !has) ? null : _editText,
+        ),
+        _ToolButton(
+          icon: Icons.palette_rounded,
+          label: 'Style',
+          onTap: (off || !has) ? null : _styleSheet,
+        ),
+        _ToolButton(
+          icon: Icons.content_copy_rounded,
+          label: 'Duplicate',
+          onTap: (off || !has) ? null : _duplicateLayer,
+        ),
+        _ToolButton(
+          icon: Icons.delete_outline_rounded,
+          label: 'Delete',
+          onTap: (off || !has) ? null : _deleteLayer,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = _c;
     final off = _busy || c == null;
-    final dim = Theme.of(context).colorScheme.onSurfaceVariant;
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'KRUDEV',
-          style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold),
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        titleSpacing: 20,
+        title: Row(
+          children: [
+            Container(
+              width: 10,
+              height: 10,
+              decoration: const BoxDecoration(
+                color: _Pal.accent,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Text(
+              'KRUDEV',
+              style: TextStyle(
+                letterSpacing: 4,
+                fontWeight: FontWeight.w800,
+                fontSize: 18,
+              ),
+            ),
+          ],
         ),
         actions: [
           IconButton(
             tooltip: 'New project',
             onPressed: _busy ? null : _pick,
-            icon: const Icon(Icons.video_library_outlined),
+            icon: const Icon(Icons.video_library_rounded),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: FilledButton.icon(
+              onPressed: off ? null : _save,
+              icon: const Icon(Icons.download_rounded, size: 18),
+              label: const Text('Save'),
+            ),
           ),
         ],
       ),
       body: Column(
         children: [
-          Expanded(
-            child: c == null
-                ? Center(
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _pick,
-                      icon: const Icon(Icons.add_circle_outline),
-                      label: const Text('New Project'),
-                    ),
-                  )
-                : GestureDetector(
-                    onTap: _toggle,
-                    child: Center(
-                      child: AspectRatio(
-                        aspectRatio: c.value.aspectRatio,
-                        child: VideoPlayer(c),
-                      ),
-                    ),
-                  ),
-          ),
+          Expanded(child: c == null ? _emptyState() : _preview(c)),
           if (c != null && !_busy) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  ValueListenableBuilder<VideoPlayerValue>(
-                    valueListenable: c,
-                    builder: (context, v, _) =>
-                        Text(_fmt(v.position.inMilliseconds / 1000.0)),
-                  ),
-                  Text(' / ${_fmt(_total)}',
-                      style: TextStyle(color: dim, fontSize: 12)),
-                  const Spacer(),
-                  ValueListenableBuilder<VideoPlayerValue>(
-                    valueListenable: c,
-                    builder: (context, v, _) => IconButton(
-                      iconSize: 32,
-                      onPressed: _toggle,
-                      icon: Icon(
-                        v.isPlaying
-                            ? Icons.pause_circle_filled
-                            : Icons.play_circle_fill,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  Text('Selected ${_fmt(_range.end - _range.start)}',
-                      style: TextStyle(color: dim, fontSize: 12)),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _Timeline(
-                controller: c,
-                thumbs: _thumbs,
-                total: _total,
-                range: _range,
-                onRange: (r) => setState(() => _range = r),
-                onSeek: (s) => _seekTo(s),
-                onSeekEnd: (s) => _seekTo(s, force: true),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-              child: Text(
-                'Drag the orange handles to select a range. '
-                'Drag anywhere else to scrub.',
-                style: TextStyle(fontSize: 11, color: dim),
+            _transport(c),
+            _timelinePanel(c),
+          ],
+          if (_busy) _busyPanel(),
+          if (c != null) ...[
+            _modeTabs(),
+            SafeArea(
+              top: false,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: SizedBox(
+                  key: ValueKey(_mode),
+                  height: 92,
+                  child: _mode == _Mode.edit ? _editTools(off) : _textTools(off),
+                ),
               ),
             ),
           ],
-          if (_busy)
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text('$_status...'),
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: _progress > 0 ? _progress : null,
-                  ),
-                ],
-              ),
-            ),
-          SafeArea(
-            top: false,
-            child: SizedBox(
-              height: 84,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _tool(
-                    Icons.content_cut,
-                    'Trim',
-                    off
-                        ? null
-                        : () => _run(
-                              'Trim',
-                              (b) => b.trim(
-                                startTimeMs: (_range.start * 1000).round(),
-                                endTimeMs: (_range.end * 1000).round(),
-                              ),
-                            ),
-                  ),
-                  _tool(Icons.speed, 'Speed', off ? null : _speedSheet),
-                  _tool(
-                    Icons.rotate_right,
-                    'Rotate',
-                    off
-                        ? null
-                        : () => _run(
-                              'Rotate',
-                              (b) => b.rotate(degree: RotationDegree.degree90),
-                            ),
-                  ),
-                  _tool(
-                    Icons.flip,
-                    'Flip H',
-                    off
-                        ? null
-                        : () => _run(
-                              'Flip',
-                              (b) => b.flip(
-                                flipDirection: FlipDirection.horizontal,
-                              ),
-                            ),
-                  ),
-                  _tool(
-                    Icons.swap_vert,
-                    'Flip V',
-                    off
-                        ? null
-                        : () => _run(
-                              'Flip',
-                              (b) => b.flip(
-                                flipDirection: FlipDirection.vertical,
-                              ),
-                            ),
-                  ),
-                  _tool(Icons.crop, 'Crop', off ? null : _cropSheet),
-                  _tool(
-                    Icons.volume_off,
-                    'Mute',
-                    off ? null : () => _run('Mute', (b) => b.removeAudio()),
-                  ),
-                  _tool(
-                    Icons.add_box_outlined,
-                    'Add clip',
-                    off ? null : _addClip,
-                  ),
-                  _tool(
-                    Icons.undo,
-                    'Undo',
-                    (off || _history.isEmpty) ? null : _undo,
-                  ),
-                  _tool(Icons.save_alt, 'Save', off ? null : _save),
-                ],
-              ),
-            ),
-          ),
         ],
+      ),
+    );
+  }
+}
+
+class _CenterAt extends SingleChildLayoutDelegate {
+  _CenterAt(this.x, this.y);
+
+  final double x;
+  final double y;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      constraints.loosen();
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) => Offset(
+        x * size.width - childSize.width / 2,
+        y * size.height - childSize.height / 2,
+      );
+
+  @override
+  bool shouldRelayout(covariant _CenterAt oldDelegate) =>
+      oldDelegate.x != x || oldDelegate.y != y;
+}
+
+class _ToolButton extends StatelessWidget {
+  const _ToolButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Opacity(
+      opacity: enabled ? 1 : 0.35,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: enabled
+            ? () {
+                HapticFeedback.selectionClick();
+                onTap!();
+              }
+            : null,
+        child: SizedBox(
+          width: 70,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: _Pal.panel2,
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: _Pal.line),
+                ),
+                child: Icon(icon, size: 22),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: const TextStyle(fontSize: 11, color: Colors.white70),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -509,8 +1151,7 @@ class _TimelineState extends State<_Timeline> {
 
   double _total() => widget.total <= 0 ? 1.0 : widget.total;
 
-  double _toSec(double x, double w) =>
-      _clampD(x / w, 0.0, 1.0) * _total();
+  double _toSec(double x, double w) => _clampD(x / w, 0.0, 1.0) * _total();
 
   void _start(double x, double w) {
     final sx = widget.range.start / _total() * w;
@@ -653,7 +1294,7 @@ class _TimelineState extends State<_Timeline> {
                   top: -2,
                   bottom: -2,
                   width: 14,
-                                child: _handle(accent),
+                  child: _handle(accent),
                 ),
                 Positioned(
                   left: ex - 7,
@@ -682,6 +1323,180 @@ class _TimelineState extends State<_Timeline> {
           ),
         );
       },
+    );
+  }
+}
+
+enum _RowDrag { none, left, right, move }
+
+/// After Effects style layer rows: one bar per layer, same time axis as the
+/// filmstrip. Drag the bar to move it, drag its ends to change in/out points.
+class _LayerRows extends StatefulWidget {
+  const _LayerRows({
+    required this.controller,
+    required this.layers,
+    required this.total,
+    required this.selected,
+    required this.onSelect,
+    required this.onToggle,
+    required this.onChanged,
+  });
+
+  final VideoPlayerController controller;
+  final List<TextLayer> layers;
+  final double total;
+  final int? selected;
+  final ValueChanged<int> onSelect;
+  final ValueChanged<int> onToggle;
+  final VoidCallback onChanged;
+
+  @override
+  State<_LayerRows> createState() => _LayerRowsState();
+}
+
+class _LayerRowsState extends State<_LayerRows> {
+  _RowDrag _mode = _RowDrag.none;
+  double _grab = 0;
+
+  double _tot() => widget.total <= 0 ? 1.0 : widget.total;
+
+  double _sec(double x, double w) => _clampD(x / w, 0.0, 1.0) * _tot();
+
+  void _dragStart(TextLayer l, double x, double w) {
+    final tot = _tot();
+    final sx = l.start / tot * w;
+    final ex = l.end / tot * w;
+    final ds = (x - sx).abs();
+    final de = (x - ex).abs();
+    widget.onSelect(l.id);
+    if (ds < 20 && ds <= de) {
+      _mode = _RowDrag.left;
+    } else if (de < 20) {
+      _mode = _RowDrag.right;
+    } else if (x >= sx && x <= ex) {
+      _mode = _RowDrag.move;
+      _grab = _sec(x, w) - l.start;
+    } else {
+      _mode = _RowDrag.none;
+    }
+  }
+
+  void _dragUpdate(TextLayer l, double x, double w) {
+    final sec = _sec(x, w);
+    final tot = _tot();
+    if (_mode == _RowDrag.left) {
+      l.start = _clampD(sec, 0.0, _clampD(l.end - 0.3, 0.0, tot));
+    } else if (_mode == _RowDrag.right) {
+      l.end = _clampD(sec, _clampD(l.start + 0.3, 0.0, tot), tot);
+    } else if (_mode == _RowDrag.move) {
+      final len = l.end - l.start;
+      final ns = _clampD(sec - _grab, 0.0, _clampD(tot - len, 0.0, tot));
+      l.start = ns;
+      l.end = ns + len;
+    } else {
+      return;
+    }
+    widget.onChanged();
+  }
+
+  Widget _row(TextLayer l, double w) {
+    final tot = _tot();
+    final sx = _clampD(l.start / tot * w, 0.0, w);
+    final ex = _clampD(l.end / tot * w, 0.0, w);
+    final sel = l.id == widget.selected;
+    final accent = Theme.of(context).colorScheme.primary;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => widget.onToggle(l.id),
+      onHorizontalDragStart: (d) => _dragStart(l, d.localPosition.dx, w),
+      onHorizontalDragUpdate: (d) => _dragUpdate(l, d.localPosition.dx, w),
+      onHorizontalDragEnd: (_) => _mode = _RowDrag.none,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _Pal.panel2,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: sx,
+            width: _clampD(ex - sx, 0.0, w),
+            top: 3,
+            bottom: 3,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.centerLeft,
+              decoration: BoxDecoration(
+                color: accent.withAlpha(sel ? 210 : 110),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: sel ? Colors.white : Colors.transparent,
+                  width: 1.5,
+                ),
+              ),
+              child: Text(
+                l.text.replaceAll('\n', ' '),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final n = widget.layers.length;
+    if (n == 0) return const SizedBox.shrink();
+    final rows = n > 3 ? 3 : n;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: SizedBox(
+        height: rows * 32.0,
+        child: LayoutBuilder(
+          builder: (context, box) {
+            final w = box.maxWidth;
+            final tot = _tot();
+            return Stack(
+              children: [
+                ListView.builder(
+                  padding: EdgeInsets.zero,
+                  itemExtent: 32,
+                  itemCount: n,
+                  itemBuilder: (context, i) => _row(widget.layers[i], w),
+                ),
+                ValueListenableBuilder<VideoPlayerValue>(
+                  valueListenable: widget.controller,
+                  builder: (context, v, _) {
+                    final px = v.position.inMilliseconds / 1000.0 / tot * w;
+                    return Positioned(
+                      left: _clampD(px, 0.0, w) - 1,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      child: const IgnorePointer(
+                        child: ColoredBox(color: Colors.white),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
